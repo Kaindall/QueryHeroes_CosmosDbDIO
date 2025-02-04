@@ -23,19 +23,10 @@ import java.io.ByteArrayInputStream;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-/**
- * Azure Functions with HTTP Trigger.
- */
 public class Function {
-    /**
-     * This function listens at endpoint "/api/HttpExample". Two ways to invoke it using "curl" command in bash:
-     * 1. curl -d "HTTP Body" {your host}/api/HttpExample
-     * 2. curl "{your host}/api/HttpExample?name=HTTP%20Query"
-     */
-    @FunctionName("HttpExample")
+    @FunctionName("heroes")
     public HttpResponseMessage run(
             @HttpTrigger(
                 name = "req",
@@ -55,7 +46,9 @@ public class Function {
                     BlobContainerClient containerClient = StorageConnector.getInstance();
 
                     context.getLogger().info("Succefully received Blob Container instance");
+                    context.getLogger().info("Receiving base64 image from body and converting");
                     byte[] imageBytes = Base64.getDecoder().decode(hero.getImageBase64());
+                    context.getLogger().info("Creating or replacing existent blobs");
                     String blobName = hero.getName().replaceAll("\s+", "_") + ".png";
                     BlobClient blobClient = containerClient.getBlobClient(blobName);
                     
@@ -86,32 +79,35 @@ public class Function {
                 .orElseGet(() -> request.createResponseBuilder(HttpStatus.BAD_REQUEST)
                 .body("Passe as características do herói a ser publicado: name, power, alter, imageUrl").build());
         }
-            
+        context.getLogger().info("It's not a POST request, going to GET pathway");
         final String queryId = request.getQueryParameters().get("id");
 
         if (queryId == null) {
             return request.createResponseBuilder(HttpStatus.BAD_REQUEST).body("Passe o ID a ser buscado na consulta").build();
         }
-
+        context.getLogger().info("Parameter ID recognized");
+        context.getLogger().info("Connecting to Cosmos Client");
         CosmosAsyncClient cosmosClient = CosmosConnector.getInstance();
         CosmosAsyncDatabase database = cosmosClient.getDatabase("ToDoList");
         CosmosAsyncContainer container = database.getContainer("Items");
-
+        context.getLogger().info("Connected to Cosmos Client");
         SuperheroResponse heroResponse;
         try {
+            context.getLogger().info("Trying to read item from Cosmos DB");
             heroResponse = container.readItem(queryId, PartitionKey.NONE, SuperheroResponse.class)
                 .map(CosmosItemResponse::getItem)
                 .toFuture()
                 .get();
             ObjectMapper mapper = new ObjectMapper();
+            context.getLogger().info("Mapping Cosmos item found into Java POJO");
             String jsonResponse = mapper.writeValueAsString(heroResponse);
             return request.createResponseBuilder(HttpStatus.OK).header("Content-Type", "application/json").body(jsonResponse).build();
         } catch (InterruptedException | ExecutionException e) {
             e.printStackTrace();
-            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fala em converter o herói encontrado em objeto de retorno").build();
+            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fail to convert found hero into return object").build();
         } catch (JsonProcessingException e) {
             e.printStackTrace();
-            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fala em converter o herói encontrado em objeto de retorno").build();
+            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fail to convert found hero into return object").build();
         }
     }
 
