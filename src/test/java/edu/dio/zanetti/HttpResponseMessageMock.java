@@ -44,6 +44,7 @@ public class HttpResponseMessageMock implements HttpResponseMessage {
 
     public static class HttpResponseMessageBuilderMock implements HttpResponseMessage.Builder {
         private Object body;
+        @SuppressWarnings("unused")
         private int httpStatusCode;
         private Map<String, String> headers = new HashMap<>();
         private HttpStatusType httpStatus;

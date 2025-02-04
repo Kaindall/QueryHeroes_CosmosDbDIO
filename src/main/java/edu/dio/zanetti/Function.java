@@ -3,7 +3,6 @@ package edu.dio.zanetti;
 import com.azure.cosmos.CosmosAsyncClient;
 import com.azure.cosmos.CosmosAsyncContainer;
 import com.azure.cosmos.CosmosAsyncDatabase;
-import com.azure.cosmos.models.CosmosItemRequestOptions;
 import com.azure.cosmos.models.CosmosItemResponse;
 import com.azure.cosmos.models.PartitionKey;
 import com.azure.storage.blob.BlobClient;
@@ -25,6 +24,7 @@ import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Azure Functions with HTTP Trigger.
@@ -97,19 +97,22 @@ public class Function {
         CosmosAsyncDatabase database = cosmosClient.getDatabase("ToDoList");
         CosmosAsyncContainer container = database.getContainer("Items");
 
-        CompletableFuture<SuperheroResponse> heroResponse = container.readItem(queryId, PartitionKey.NONE, SuperheroResponse.class)
-            .map(CosmosItemResponse::getItem)
-            .toFuture();
-
-        ObjectMapper mapper = new ObjectMapper();
+        SuperheroResponse heroResponse;
         try {
+            heroResponse = container.readItem(queryId, PartitionKey.NONE, SuperheroResponse.class)
+                .map(CosmosItemResponse::getItem)
+                .toFuture()
+                .get();
+            ObjectMapper mapper = new ObjectMapper();
             String jsonResponse = mapper.writeValueAsString(heroResponse);
-            return request.createResponseBuilder(HttpStatus.OK).body(jsonResponse).build();
+            return request.createResponseBuilder(HttpStatus.OK).header("Content-Type", "application/json").body(jsonResponse).build();
+        } catch (InterruptedException | ExecutionException e) {
+            e.printStackTrace();
+            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fala em converter o herói encontrado em objeto de retorno").build();
         } catch (JsonProcessingException e) {
             e.printStackTrace();
             return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fala em converter o herói encontrado em objeto de retorno").build();
         }
-        
     }
 
     private Optional<SuperheroRequest> createSuper(String hero) {
