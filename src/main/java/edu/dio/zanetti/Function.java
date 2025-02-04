@@ -1,5 +1,16 @@
 package edu.dio.zanetti;
 
+import com.azure.cosmos.CosmosAsyncClient;
+import com.azure.cosmos.CosmosAsyncContainer;
+import com.azure.cosmos.CosmosAsyncDatabase;
+import com.azure.cosmos.models.CosmosItemRequestOptions;
+import com.azure.cosmos.models.CosmosItemResponse;
+import com.azure.cosmos.models.PartitionKey;
+import com.azure.storage.blob.BlobClient;
+import com.azure.storage.blob.BlobContainerClient;
+import com.azure.storage.blob.models.BlobHttpHeaders;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.azure.functions.ExecutionContext;
 import com.microsoft.azure.functions.HttpMethod;
 import com.microsoft.azure.functions.HttpRequestMessage;
@@ -9,7 +20,11 @@ import com.microsoft.azure.functions.annotation.AuthorizationLevel;
 import com.microsoft.azure.functions.annotation.FunctionName;
 import com.microsoft.azure.functions.annotation.HttpTrigger;
 
+import java.io.ByteArrayInputStream;
+import java.util.Base64;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Azure Functions with HTTP Trigger.
@@ -30,14 +45,90 @@ public class Function {
             final ExecutionContext context) {
         context.getLogger().info("Java HTTP trigger processed a request.");
 
-        // Parse query parameter
-        final String query = request.getQueryParameters().get("name");
-        final String name = request.getBody().orElse(query);
+        
+        if (request.getHttpMethod().equals(HttpMethod.POST)) {
+            context.getLogger().info("Requisition POST recognized");
+            return Optional.ofNullable(request.getBody().get())
+                .map(body -> {
+                    SuperheroRequest hero = createSuper(body).orElseThrow();
+                    context.getLogger().info("Succefully mapped body to Java POJO");
+                    BlobContainerClient containerClient = StorageConnector.getInstance();
 
-        if (name == null) {
-            return request.createResponseBuilder(HttpStatus.BAD_REQUEST).body("Please pass a name on the query string or in the request body").build();
-        } else {
-            return request.createResponseBuilder(HttpStatus.OK).body("Hello, " + name).build();
+                    context.getLogger().info("Succefully received Blob Container instance");
+                    byte[] imageBytes = Base64.getDecoder().decode(hero.getImageBase64());
+                    String blobName = hero.getName().replaceAll("\s+", "_") + ".png";
+                    BlobClient blobClient = containerClient.getBlobClient(blobName);
+                    
+                    try (ByteArrayInputStream inputStream = new ByteArrayInputStream(imageBytes)) {
+                        BlobHttpHeaders headers = new BlobHttpHeaders().setContentType("image/jpeg");
+                        blobClient.upload(inputStream, imageBytes.length, true);
+                        blobClient.setHttpHeaders(headers);
+                        context.getLogger().info("Image successfully uploaded to Blob Storage");
+                    } catch (Exception e) {
+                        context.getLogger().severe("Error uploading image: " + e.getMessage());
+                        return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body("Failed to upload image").build();
+                    }
+
+                    SuperheroResponse heroResponse = querySuper(hero, blobClient.getBlobUrl()).get();
+                    CosmosAsyncClient cosmosClient = CosmosConnector.getInstance();
+                    CosmosAsyncDatabase database = cosmosClient.getDatabase("ToDoList");
+                    CosmosAsyncContainer container = database.getContainer("Items");
+                    
+
+                    container.createItem(heroResponse).subscribe(
+                        response -> context.getLogger().info("Successfully stored hero in Cosmos DB"),
+                        error -> context.getLogger().severe("Error storing hero in Cosmos DB: " + error.getMessage())
+                    );
+
+                    return request.createResponseBuilder(HttpStatus.OK).body(heroResponse).build();
+                })
+                .orElseGet(() -> request.createResponseBuilder(HttpStatus.BAD_REQUEST)
+                .body("Passe as características do herói a ser publicado: name, power, alter, imageUrl").build());
         }
+            
+        final String queryId = request.getQueryParameters().get("id");
+
+        if (queryId == null) {
+            return request.createResponseBuilder(HttpStatus.BAD_REQUEST).body("Passe o ID a ser buscado na consulta").build();
+        }
+
+        CosmosAsyncClient cosmosClient = CosmosConnector.getInstance();
+        CosmosAsyncDatabase database = cosmosClient.getDatabase("ToDoList");
+        CosmosAsyncContainer container = database.getContainer("Items");
+
+        CompletableFuture<SuperheroResponse> heroResponse = container.readItem(queryId, PartitionKey.NONE, SuperheroResponse.class)
+            .map(CosmosItemResponse::getItem)
+            .toFuture();
+
+        ObjectMapper mapper = new ObjectMapper();
+        try {
+            String jsonResponse = mapper.writeValueAsString(heroResponse);
+            return request.createResponseBuilder(HttpStatus.OK).body(jsonResponse).build();
+        } catch (JsonProcessingException e) {
+            e.printStackTrace();
+            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Fala em converter o herói encontrado em objeto de retorno").build();
+        }
+        
+    }
+
+    private Optional<SuperheroRequest> createSuper(String hero) {
+        ObjectMapper mapper = new ObjectMapper();
+        try {
+            return Optional.of(mapper.readValue(hero, SuperheroRequest.class));
+        } catch (JsonProcessingException e) {
+            e.printStackTrace();
+            return Optional.empty();
+        } 
+    }
+
+    private Optional<SuperheroResponse> querySuper(SuperheroRequest hero, String imgUrl) {
+        SuperheroResponse heroResponse = new SuperheroResponse();
+        heroResponse.setId(UUID.randomUUID().toString());
+        heroResponse.setName(hero.getName());
+        heroResponse.setPower(hero.getPower());
+        heroResponse.setAlias(hero.getAlias());
+        heroResponse.setImageUrl(imgUrl);
+        return Optional.of(heroResponse);
     }
 }

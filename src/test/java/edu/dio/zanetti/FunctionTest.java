@@ -27,11 +27,13 @@ public class FunctionTest {
         final HttpRequestMessage<Optional<String>> req = mock(HttpRequestMessage.class);
 
         final Map<String, String> queryParams = new HashMap<>();
-        queryParams.put("name", "Azure");
+        queryParams.put("id", "352d2ada-8431-4868-ac1a-ef4aaa1301b3");
         doReturn(queryParams).when(req).getQueryParameters();
 
         final Optional<String> queryBody = Optional.empty();
         doReturn(queryBody).when(req).getBody();
+
+        doReturn(HttpMethod.GET).when(req).getHttpMethod();
 
         doAnswer(new Answer<HttpResponseMessage.Builder>() {
             @Override
